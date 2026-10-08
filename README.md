@@ -9,4 +9,6 @@ Financial Data Quality, Reconciliation and Exception Management Platform.
 - PostgreSQL
 - React
 - Pandas
-- Power BIs
+
+
+For Render and Vercel environment setup, start commands, and the first ADMIN bootstrap procedure, see [DEPLOYMENT.md](DEPLOYMENT.md).

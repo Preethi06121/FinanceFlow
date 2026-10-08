@@ -1,0 +1,31 @@
+{
+  "seed": 20261007,
+  "base_transactions": 10000,
+  "rows": {
+    "customers": 1000,
+    "accounts": 1500,
+    "sales": 10020,
+    "payments": 10010,
+    "ledger": 9960
+  },
+  "injected_issues": {
+    "sales_duplicate_transactions": 20,
+    "sales_missing_amount": 10,
+    "sales_invalid_dates": 5,
+    "sales_invalid_currency": 5,
+    "sales_missing_customer_reference": 5,
+    "sales_invalid_account_reference": 5,
+    "sales_invalid_status": 5,
+    "sales_invalid_transaction_type": 5,
+    "payments_duplicate_transactions": 10,
+    "payments_invalid_amount": 10,
+    "payments_missing_date": 5,
+    "payments_invalid_currency": 5,
+    "payments_invalid_account_reference": 5,
+    "payments_invalid_status": 5,
+    "ledger_missing_transactions": 50,
+    "ledger_amount_mismatches": 30,
+    "ledger_invalid_account_reference": 5,
+    "ledger_duplicate_transactions": 10
+  }
+}
