@@ -3,11 +3,13 @@
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from database import EXPECTED_DATABASE_NAME
+
 
 def apply_processing_schema_updates(connection: Connection) -> None:
     """Add processing fields to the existing FinanceFlow tables if absent."""
-    if connection.execute(text("SELECT current_database()")).scalar_one() != "FinanceFlow_db":
-        raise RuntimeError("Refusing schema updates outside FinanceFlow_db")
+    if connection.execute(text("SELECT current_database()")).scalar_one() != EXPECTED_DATABASE_NAME:
+        raise RuntimeError(f"Refusing schema updates outside {EXPECTED_DATABASE_NAME}")
 
     statements = (
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'ANALYST'",

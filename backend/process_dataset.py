@@ -2,14 +2,14 @@
 
 import json
 
-from database import SessionLocal, engine
+from database import EXPECTED_DATABASE_NAME, SessionLocal, engine
 from processing.pipeline import run_processing
 
 
 if engine is None or SessionLocal is None:
     raise SystemExit("DATABASE_URL is not configured")
-if engine.url.database != "FinanceFlow_db":
-    raise SystemExit("Refusing to process data outside FinanceFlow_db")
+if engine.url.database != EXPECTED_DATABASE_NAME:
+    raise SystemExit(f"Refusing to process data outside {EXPECTED_DATABASE_NAME}")
 
 with SessionLocal() as session:
     try:

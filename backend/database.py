@@ -17,8 +17,11 @@ class Base(DeclarativeBase):
 
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-if DATABASE_URL and make_url(DATABASE_URL).database != "FinanceFlow_db":
-    raise RuntimeError("DATABASE_URL must target FinanceFlow_db; refusing to initialize another database")
+EXPECTED_DATABASE_NAME = os.getenv("FINANCEFLOW_DATABASE_NAME", "FinanceFlow_db").strip()
+if DATABASE_URL and make_url(DATABASE_URL).database != EXPECTED_DATABASE_NAME:
+    raise RuntimeError(
+        f"DATABASE_URL must target {EXPECTED_DATABASE_NAME}; refusing to initialize another database"
+    )
 engine = (
     create_engine(DATABASE_URL, pool_pre_ping=True)
     if DATABASE_URL
