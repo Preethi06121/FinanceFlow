@@ -18,7 +18,12 @@ class Base(DeclarativeBase):
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 EXPECTED_DATABASE_NAME = os.getenv("FINANCEFLOW_DATABASE_NAME", "FinanceFlow_db").strip()
-if DATABASE_URL and make_url(DATABASE_URL).database != EXPECTED_DATABASE_NAME:
+if DATABASE_URL:
+    DATABASE_URL = make_url(DATABASE_URL)
+    if DATABASE_URL.drivername in {"postgres", "postgresql"}:
+        DATABASE_URL = DATABASE_URL.set(drivername="postgresql+psycopg2")
+
+if DATABASE_URL and DATABASE_URL.database != EXPECTED_DATABASE_NAME:
     raise RuntimeError(
         f"DATABASE_URL must target {EXPECTED_DATABASE_NAME}; refusing to initialize another database"
     )
