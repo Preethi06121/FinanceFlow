@@ -18,6 +18,7 @@ expected = {
     "customers",
     "accounts",
     "transactions",
+    "payments",
     "validation_results",
     "reconciliation_results",
     "exceptions",

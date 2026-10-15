@@ -11,6 +11,8 @@ This guide describes a Vercel frontend, Render FastAPI service, and Render Postg
 
 The backend does not create tables at application startup. On a new, empty `FinanceFlow_db`, review `backend/migrations.py` and run `python backend/create_tables.py` once from the repository root. That script creates the tables and applies the project's compatibility updates; it is a separate, write operation and should not be configured as a recurring startup command. Back up and review any existing database before running it. This project has no migration runner or rollback workflow.
 
+The optional multi-file import adds a `payments` table through the same reviewed, additive schema setup. Run the schema update as a planned deployment operation before enabling the new payment import path; the application does not create or migrate tables at startup. Do not run schema scripts against a database other than `FinanceFlow_db`.
+
 ## 2. Render FastAPI service
 
 Create a Web Service from the repository root with Python as the runtime. Set:
@@ -51,6 +53,10 @@ Set these Vercel environment variables:
 Set the backend's `CORS_ALLOWED_ORIGINS` to the exact Vercel Production domain(s) used by the app. Add a Preview domain only if that preview is intentionally allowed to call the production API. Do not use a `NEXT_PUBLIC_` prefix for backend URLs or secrets. Production proxy routes return 503 when `FINANCEFLOW_API_BASE_URL` is missing instead of falling back to localhost.
 
 The browser-facing JWT cookie is HTTP-only, Secure in production, `SameSite=Lax`, and scoped to `/`. The cookie is host-only (no `Domain` attribute); the browser talks to Vercel's same-origin `/api` routes while the Vercel server forwards authenticated requests to Render. This avoids cross-site cookie requirements between Vercel and Render.
+
+The CSV review workflow currently caps the combined files in one request at 4 MiB to leave room for multipart framing under Vercel Functions' request-body limit. This is a deployment-path limit, not a row-count guarantee; support for larger requests requires a separate direct-to-storage upload architecture. The UI and API return an explicit 413 when the cap is exceeded. Do not infer 70,000-row support from local test results alone.
+
+AI-assisted mapping is optional. Configure `OPENAI_API_KEY` and optionally `FINANCEFLOW_MAPPING_MODEL` only in the Render backend environment. The API key is never sent to the frontend. Without the key or optional LangChain dependencies, exact/alias mappings and manual review remain available.
 
 ## 5. Local environment and commands
 

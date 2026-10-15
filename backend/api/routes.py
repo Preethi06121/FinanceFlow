@@ -1,8 +1,9 @@
 """Thin, authenticated HTTP routes for FinanceFlow."""
 
+import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -24,6 +25,9 @@ from api.schemas import (
     UserUpdate,
 )
 from database import engine, get_db
+from ingestion.inspection import CsvInspectionError, mapping_response
+from ingestion.mapping import DatasetType
+from ingestion.llm_provider import configured_mapping_provider
 from models import User
 from processing.exceptions import transition_exception
 from processing.pipeline import run_processing
@@ -35,6 +39,7 @@ from services.dashboard import dashboard_summary
 from services.exceptions import get_exception, list_exceptions
 from services.reconciliation import list_results
 from services.transactions import UploadSchemaError, get_transaction, list_transactions, upload_sales_csv
+from services.upload_workflow import MAX_UPLOAD_FILES, UPLOAD_LIMIT_BYTES, UploadWorkflowError, process_upload_batch
 from services.users import create_user, list_users, update_user
 
 router = APIRouter()
@@ -117,6 +122,90 @@ async def upload_transactions(
         raise
     finally:
         await file.close()
+
+
+@router.post("/uploads/preview")
+async def preview_uploads(
+    user: Analyst,
+    files: list[UploadFile] = File(...),
+    dataset_types: str = Form("{}"),
+):
+    """Inspect files and suggest mappings without writing to the database."""
+    if not files:
+        raise HTTPException(status_code=422, detail="Select at least one CSV file")
+    if len(files) > MAX_UPLOAD_FILES:
+        raise HTTPException(status_code=422, detail=f"Upload no more than {MAX_UPLOAD_FILES} CSV files in one batch")
+    try:
+        try:
+            selected_types = json.loads(dataset_types)
+            if not isinstance(selected_types, dict):
+                raise ValueError
+        except (json.JSONDecodeError, ValueError):
+            raise HTTPException(status_code=422, detail="dataset_types must be a JSON object") from None
+        total_size = 0
+        responses = []
+        provider = configured_mapping_provider()
+        for file in files:
+            if not file.filename or not file.filename.lower().endswith(".csv"):
+                raise HTTPException(status_code=415, detail="Upload CSV files only")
+            contents = await file.read(UPLOAD_LIMIT_BYTES + 1)
+            total_size += len(contents)
+            if len(contents) > UPLOAD_LIMIT_BYTES or total_size > UPLOAD_LIMIT_BYTES:
+                raise HTTPException(status_code=413, detail="Combined CSV files exceed the 4 MiB upload limit")
+            chosen = selected_types.get(file.filename)
+            try:
+                selected = DatasetType(chosen) if chosen else None
+                responses.append(mapping_response(file.filename, contents, provider, selected))
+            except (ValueError, CsvInspectionError) as exc:
+                raise HTTPException(status_code=422, detail={"filename": file.filename, "message": str(exc)}) from None
+        if len({item["filename"].casefold() for item in responses}) != len(responses):
+            raise HTTPException(status_code=422, detail="Selected files must have distinct filenames")
+        return {"files": responses, "max_total_bytes": UPLOAD_LIMIT_BYTES}
+    finally:
+        for file in files:
+            await file.close()
+
+
+@router.post("/uploads/process", status_code=status.HTTP_201_CREATED)
+async def process_uploads(
+    session: Db,
+    user: Analyst,
+    files: list[UploadFile] = File(...),
+    mappings: str = Form(...),
+):
+    """Process a user-reviewed multi-file mapping as one database transaction."""
+    try:
+        if len(files) > MAX_UPLOAD_FILES:
+            raise HTTPException(status_code=422, detail=f"Upload no more than {MAX_UPLOAD_FILES} CSV files in one batch")
+        try:
+            mapping_descriptors = json.loads(mappings)
+            if not isinstance(mapping_descriptors, list):
+                raise ValueError
+        except (json.JSONDecodeError, ValueError):
+            raise HTTPException(status_code=422, detail="mappings must be a JSON array") from None
+        upload_files: list[tuple[str, bytes]] = []
+        total_size = 0
+        for file in files:
+            if not file.filename or not file.filename.lower().endswith(".csv"):
+                raise HTTPException(status_code=415, detail="Upload CSV files only")
+            contents = await file.read(UPLOAD_LIMIT_BYTES + 1)
+            total_size += len(contents)
+            if len(contents) > UPLOAD_LIMIT_BYTES or total_size > UPLOAD_LIMIT_BYTES:
+                raise HTTPException(status_code=413, detail="Combined CSV files exceed the 4 MiB upload limit")
+            upload_files.append((file.filename, contents))
+        try:
+            return process_upload_batch(session, files=upload_files, mappings=mapping_descriptors)
+        except UploadWorkflowError as exc:
+            raise HTTPException(status_code=422, detail={"message": str(exc), "issues": exc.issues}) from None
+    except HTTPException:
+        session.rollback()
+        raise
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        for file in files:
+            await file.close()
 
 
 @router.post("/reconciliation/run")

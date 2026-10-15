@@ -44,6 +44,14 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json({ detail: "FinanceFlow API is unavailable" }, { status: 503 });
     }
+    if (upstream.status >= 500) {
+      // eslint-disable-next-line no-console -- Log only the upstream status, never its response body.
+      console.error("[api/auth/register] request failed", {
+        reason: "backend_error_response",
+        status: upstream.status,
+      });
+      return NextResponse.json({ detail: "FinanceFlow API is unavailable" }, { status: 503 });
+    }
     return NextResponse.json(payload, { status: upstream.status });
   } catch (error) {
     // eslint-disable-next-line no-console -- Server-side operational diagnostic; error message is excluded.

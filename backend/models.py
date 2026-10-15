@@ -87,6 +87,20 @@ class Transaction(TimestampMixin, Base):
     description: Mapped[str | None] = mapped_column(Text)
 
 
+class Payment(TimestampMixin, Base):
+    """Persist a payment row imported alongside related sales data."""
+    __tablename__ = "payments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reference: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    transaction_reference: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"), index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    payment_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class ValidationResult(TimestampMixin, Base):
     __tablename__ = "validation_results"
     __table_args__ = (Index("ix_validation_results_transaction_status", "transaction_id", "status"),)

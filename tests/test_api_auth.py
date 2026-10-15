@@ -244,6 +244,45 @@ class ApiAuthTests(unittest.TestCase):
         })
         self.assertEqual(blank_name.status_code, 422)
 
+    def test_public_registration_requires_all_fields(self):
+        base = {
+            "full_name": "Required Fields",
+            "email": "required-fields@example.test",
+            "password": secrets.token_urlsafe(24),
+        }
+        for field in base:
+            with self.subTest(field=field):
+                payload = {key: value for key, value in base.items() if key != field}
+                response = self.client.post("/auth/register", json=payload)
+                self.assertEqual(response.status_code, 422)
+
+    def test_registration_sql_injection_payloads_are_rejected_or_kept_as_data(self):
+        invalid_email = self.client.post("/auth/register", json={
+            "full_name": "SQL Injection Check",
+            "email": "x' OR 1=1 --@example.test",
+            "password": secrets.token_urlsafe(24),
+        })
+        self.assertEqual(invalid_email.status_code, 422)
+
+        literal_name = "Analyst'); DROP TABLE users; --"
+        injection_password = "' OR 1=1 -- harmless test"
+        response = self.client.post("/auth/register", json={
+            "full_name": literal_name,
+            "email": "sql-injection-check@example.test",
+            "password": injection_password,
+        })
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["full_name"], literal_name)
+        self.assertEqual(response.json()["role"], "ANALYST")
+
+        with self.TestSession() as session:
+            created = session.scalar(select(User).where(User.email == "sql-injection-check@example.test"))
+            self.assertIsNotNone(created)
+            self.assertEqual(created.full_name, literal_name)
+            self.assertNotEqual(created.password_hash, injection_password)
+            self.assertTrue(verify_password(injection_password, created.password_hash))
+            self.assertEqual(session.scalar(select(func.count(User.id))), 3)
+
     def test_public_registration_cannot_assign_admin_role(self):
         response = self.client.post("/auth/register", json={
             "full_name": "Role Escalation",

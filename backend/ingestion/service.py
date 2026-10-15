@@ -98,16 +98,46 @@ def ingest_csv(
         result.issues.append(IngestionIssue("file_error", str(exc)))
         return result
 
+    return ingest_records(
+        frame.to_dict(orient="records"),
+        source_type,
+        source_file=result.source_file,
+        columns=list(frame.columns),
+        account_ids=account_ids,
+        customer_ids=customer_ids,
+        expected_transaction_ids=expected_transaction_ids,
+        expected_amounts=expected_amounts,
+    )
+
+
+def ingest_records(
+    records: Iterable[Mapping[str, Any]],
+    source_type: str,
+    *,
+    source_file: str,
+    columns: Iterable[str],
+    account_ids: Iterable[str] | None = None,
+    customer_ids: Iterable[str] | None = None,
+    expected_transaction_ids: Iterable[str] | None = None,
+    expected_amounts: Mapping[str, Decimal | str] | None = None,
+) -> IngestionResult:
+    """Validate already-parsed canonical rows without constructing a DataFrame."""
+    source_type = source_type.lower()
+    if source_type not in SCHEMAS:
+        raise ValueError(f"Unsupported source type: {source_type}")
     schema = SCHEMAS[source_type]
-    missing_columns = [name for name in schema["required"] if name not in frame.columns]
+    column_names = list(columns)
+    source_rows = list(records)
+    result = IngestionResult(source_type=source_type, source_file=source_file)
+    missing_columns = [name for name in schema["required"] if name not in column_names]
     if missing_columns:
         for column in missing_columns:
             result.issues.append(IngestionIssue("missing_column", f"Required column '{column}' is missing", column=column))
-        result.total_rows = len(frame)
-        result.rejected_rows = len(frame)
+        result.total_rows = len(source_rows)
+        result.rejected_rows = len(source_rows)
         return result
 
-    result.total_rows = len(frame)
+    result.total_rows = len(source_rows)
     account_refs = _as_reference_set(account_ids)
     customer_refs = _as_reference_set(customer_ids)
     expected_refs = _as_reference_set(expected_transaction_ids)
@@ -120,7 +150,8 @@ def ingest_csv(
         rejected.add(index)
         result.issues.append(IngestionIssue(code, message, row_number=index + 2, column=column, value=None if _is_missing(value) else str(value)))
 
-    for index, row in frame.iterrows():
+    observed: set[str] = set()
+    for index, row in enumerate(source_rows):
         record = {key: (None if _is_missing(value) else str(value).strip()) for key, value in row.items()}
         normalized[index] = record
         for column in required:
@@ -128,6 +159,8 @@ def ingest_csv(
                 issue(index, "missing_value", f"Required value for '{column}' is missing", column)
 
         transaction_id = record.get("transaction_id")
+        if not _is_missing(row.get("transaction_id")):
+            observed.add(str(row["transaction_id"]))
         if transaction_id:
             if transaction_id in seen_transaction_ids:
                 issue(index, "duplicate_transaction", "Transaction ID is duplicated in this file", "transaction_id", transaction_id)
@@ -167,7 +200,6 @@ def ingest_csv(
             issue(index, "invalid_customer_reference", "Customer ID does not exist in the supplied customer set", "customer_id", record["customer_id"])
 
     if expected_refs is not None and source_type == "ledger":
-        observed = {value for value in frame["transaction_id"].dropna().astype(str)}
         for transaction_id in sorted(expected_refs - observed):
             result.issues.append(IngestionIssue(
                 "missing_ledger_record",

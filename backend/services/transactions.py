@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ingestion.service import SCHEMAS, ingest_csv
+from ingestion.service import SCHEMAS, ingest_records
 from models import Account, Customer, Transaction, ValidationResult
 from processing.exceptions import create_processing_exceptions
 from processing.validation import parse_amount, parse_transaction_date, validate_transactions
@@ -19,6 +19,12 @@ class UploadSchemaError(ValueError):
     def __init__(self, issues: list[dict[str, Any]]):
         self.issues = issues
         super().__init__("CSV is missing required sales columns")
+
+
+def _chunks(values, size: int = 1000):
+    items = list(values)
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
 
 
 def list_transactions(session: Session, *, offset: int, limit: int, status: str | None = None):
@@ -41,7 +47,7 @@ def upload_sales_csv(session: Session, *, filename: str, contents: bytes) -> dic
     except UnicodeDecodeError:
         raise UploadSchemaError([{"code": "invalid_encoding", "message": "CSV must use UTF-8 encoding"}]) from None
 
-    reader = csv.DictReader(io.StringIO(decoded, newline=""))
+    reader = csv.DictReader(io.StringIO(decoded, newline=""), strict=True)
     if reader.fieldnames is None:
         raise UploadSchemaError([{"code": "empty_file", "message": "CSV file is empty"}])
     required = set(SCHEMAS["sales"]["required"])
@@ -51,7 +57,18 @@ def upload_sales_csv(session: Session, *, filename: str, contents: bytes) -> dic
             {"code": "missing_column", "column": column, "message": f"Required column '{column}' is missing"}
             for column in missing_columns
         ])
-    records = list(reader)
+    records = []
+    try:
+        for row in reader:
+            if None in row:
+                raise UploadSchemaError([{
+                    "code": "malformed_row",
+                    "row_number": reader.line_num,
+                    "message": f"CSV row {reader.line_num} has more values than the header.",
+                }])
+            records.append(row)
+    except csv.Error as exc:
+        raise UploadSchemaError([{"code": "malformed_csv", "message": str(exc)}]) from None
     if not records:
         raise UploadSchemaError([{"code": "empty_file", "message": "CSV must contain at least one transaction"}])
 
@@ -67,11 +84,15 @@ def upload_sales_csv(session: Session, *, filename: str, contents: bytes) -> dic
     account_ids = {account_number: account_id for account_number, account_id, _, _ in ref_rows}
     customer_ids = {external_ref: customer_id for _, _, external_ref, customer_id in ref_rows if external_ref}
     account_customers = {account_number: external_ref for account_number, _, external_ref, _ in ref_rows if external_ref}
-    existing_refs = set(session.scalars(select(Transaction.reference).where(Transaction.reference.in_(references)))) if references else set()
+    existing_refs = set()
+    for batch in _chunks(sorted(references)):
+        existing_refs.update(session.scalars(select(Transaction.reference).where(Transaction.reference.in_(batch))))
 
-    ingestion = ingest_csv(
-        io.BytesIO(contents),
+    ingestion = ingest_records(
+        records,
         "sales",
+        source_file=filename,
+        columns=reader.fieldnames,
         account_ids=account_ids.keys(),
         customer_ids=customer_ids.keys(),
     )
@@ -97,16 +118,18 @@ def upload_sales_csv(session: Session, *, filename: str, contents: bytes) -> dic
             status=str(record["status"]).strip().lower(),
             description=f"Uploaded from {filename[:180]}",
         ))
-    if new_transactions:
-        session.add_all(new_transactions)
+    for batch in _chunks(new_transactions):
+        session.add_all(batch)
         session.flush()
 
-    transaction_ids = {
-        reference: identifier
-        for reference, identifier in session.execute(
-            select(Transaction.reference, Transaction.id).where(Transaction.reference.in_(references))
-        )
-    } if references else {}
+    transaction_ids = {}
+    for batch in _chunks(sorted(references)):
+        transaction_ids.update({
+            reference: identifier
+            for reference, identifier in session.execute(
+                select(Transaction.reference, Transaction.id).where(Transaction.reference.in_(batch))
+            )
+        })
     validation_rows = [
         {
             "transaction_id": transaction_ids.get(check.transaction_reference),
@@ -119,7 +142,8 @@ def upload_sales_csv(session: Session, *, filename: str, contents: bytes) -> dic
         for check in checks
         for rule in check.rules
     ]
-    session.bulk_insert_mappings(ValidationResult, validation_rows)
+    for batch in _chunks(validation_rows):
+        session.bulk_insert_mappings(ValidationResult, batch)
     exceptions_created = create_processing_exceptions(
         session,
         checks,
